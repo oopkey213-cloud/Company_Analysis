@@ -307,13 +307,13 @@ async def main():
     app = ApplicationBuilder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("봇 시작!")
-    async with app:
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message"])
-        await asyncio.Event().wait()
+
+    await app.initialize()
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message"])
+    await asyncio.Event().wait()
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
 if __name__ == "__main__":
     asyncio.run(main())
