@@ -8,6 +8,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from playwright.async_api import async_playwright
 
+import subprocess
+subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
