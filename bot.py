@@ -173,7 +173,7 @@ def build_html(data: dict) -> str:
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif; background: #f8f8f6; padding: 20px; width: 680px; }}
+body {{ font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
   .wrap {{ display: flex; flex-direction: column; gap: 12px; }}
   .header {{ background: #fff; border: 0.5px solid #e0ddd4; border-radius: 12px; padding: 20px 24px; }}
   .ticker {{ font-size: 12px; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }}
