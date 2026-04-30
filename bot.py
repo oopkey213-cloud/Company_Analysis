@@ -22,11 +22,10 @@ ANALYSIS_PROMPT = """
 - 사용자는 투자 자격증 보유 현직 의사로, 투자 기초 설명은 불필요
 - 기관 리포트 수준의 밀도와 시각으로 작성
 - 웹 검색을 반드시 수행하여 최신 뉴스, 실적, 이슈를 반영 (최대 3회)
-- 정성적 인사이트 중심 - 숫자 나열보다 "왜 중요한가"에 집중
+- 정성적 인사이트 중심
 
 ## 출력 형식
-JSON만 출력하세요. 앞뒤로 어떤 텍스트도 절대 붙이지 마세요. 인사말, 설명, 요약 문장 전부 금지입니다.
-cite 태그, HTML 태그 절대 사용 금지입니다.
+반드시 아래 JSON만 출력. 앞뒤 텍스트 금지. cite 태그 및 HTML 태그 절대 사용 금지.
 
 {
   "company": "기업명",
@@ -35,12 +34,12 @@ cite 태그, HTML 태그 절대 사용 금지입니다.
   "current_price": "현재가",
   "target_price": "목표주가",
   "upside": "상승여력 (예: +51%)",
-  "target_source": "증권사명 또는 컨센서스",
+  "target_source": "증권사명",
   "biz_model": "비즈니스 모델 2~3문장",
   "points": [
-    {"title": "포인트 제목", "desc": "2~3문장 상세 설명"},
-    {"title": "포인트 제목", "desc": "2~3문장 상세 설명"},
-    {"title": "포인트 제목", "desc": "2~3문장 상세 설명"}
+    {"title": "포인트 제목", "desc": "2~3문장"},
+    {"title": "포인트 제목", "desc": "2~3문장"},
+    {"title": "포인트 제목", "desc": "2~3문장"}
   ],
   "attention": "지금 주목받는 이유 (없으면 빈 문자열)",
   "risks": [
@@ -54,7 +53,7 @@ cite 태그, HTML 태그 절대 사용 금지입니다.
     {"name": "기업명", "country": "국가", "desc": "비교 포인트"},
     {"name": "기업명", "country": "국가", "desc": "비교 포인트"}
   ],
-  "summary": "투자 매력도와 주의사항 한 문장"
+  "summary": "한 줄 요약"
 }
 """
 
@@ -76,27 +75,35 @@ def clean_data(data: dict) -> dict:
 
 
 def build_text(data: dict) -> str:
-    nums = ["①", "②", "③"]
-    points = "\n\n".join([
-        f"{nums[i]} {p['title']}\n{p['desc']}"
-        for i, p in enumerate(data.get('points', []))
-    ])
-    risks = "\n\n".join([
-        f"{nums[i]} {r['title']}\n{r['desc']}"
-        for i, r in enumerate(data.get('risks', []))
-    ])
-    peers = "\n".join([
-        f"• {p['name']} ({p['country']}): {p['desc']}"
-        for p in data.get('peers', [])
-    ])
-    attention = f"\n🔍 지금 주목받는 이유\n{data['attention']}\n" if data.get('attention') else ""
+    nums = ["①", "②", "③", "④", "⑤"]
+
+    points_lines = []
+    for i, p in enumerate(data.get('points', [])):
+        num = nums[i] if i < len(nums) else f"{i+1}."
+        points_lines.append(f"{num} {p.get('title', '')}\n{p.get('desc', '')}")
+    points = "\n\n".join(points_lines)
+
+    risks_lines = []
+    for i, r in enumerate(data.get('risks', [])):
+        num = nums[i] if i < len(nums) else f"{i+1}."
+        risks_lines.append(f"{num} {r.get('title', '')}\n{r.get('desc', '')}")
+    risks = "\n\n".join(risks_lines)
+
+    peers_lines = []
+    for p in data.get('peers', []):
+        peers_lines.append(f"• {p.get('name', '')} ({p.get('country', '')}): {p.get('desc', '')}")
+    peers = "\n".join(peers_lines)
+
+    attention = f"\n🔍 지금 주목받는 이유\n{data.get('attention', '')}\n" if data.get('attention') else ""
 
     return (
+        f"{'='*30}\n"
         f"{data.get('company', '')} ({data.get('ticker', '')})\n"
-        f"{data.get('tagline', '')}\n\n"
-        f"현재가 {data.get('current_price', '-')} | "
-        f"목표주가 {data.get('target_price', '-')} ({data.get('target_source', '')}) | "
-        f"상승여력 {data.get('upside', '-')}\n\n"
+        f"{data.get('tagline', '')}\n"
+        f"{'='*30}\n\n"
+        f"현재가: {data.get('current_price', '-')}\n"
+        f"목표주가: {data.get('target_price', '-')} ({data.get('target_source', '')})\n"
+        f"상승여력: {data.get('upside', '-')}\n\n"
         f"📌 비즈니스 모델\n{data.get('biz_model', '')}\n\n"
         f"📈 투자 포인트\n{points}\n"
         f"{attention}\n"
@@ -111,27 +118,29 @@ def build_html(data: dict) -> str:
     def esc(s):
         return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    nums = ["①", "②", "③", "④", "⑤"]
+
     points_html = ""
-    for i, p in enumerate(data.get("points", []), 1):
-        num = ["①", "②", "③"][i - 1] if i <= 3 else str(i)
+    for i, p in enumerate(data.get("points", [])):
+        num = nums[i] if i < len(nums) else str(i+1)
         points_html += f"""
         <div class="point">
           <div class="num">{num}</div>
           <div class="point-content">
-            <div class="point-title">{esc(p['title'])}</div>
-            <div class="point-desc">{esc(p['desc'])}</div>
+            <div class="point-title">{esc(p.get('title',''))}</div>
+            <div class="point-desc">{esc(p.get('desc',''))}</div>
           </div>
         </div>"""
 
     risks_html = ""
-    for i, r in enumerate(data.get("risks", []), 1):
-        num = ["①", "②", "③"][i - 1] if i <= 3 else str(i)
+    for i, r in enumerate(data.get("risks", [])):
+        num = nums[i] if i < len(nums) else str(i+1)
         risks_html += f"""
         <div class="point">
           <div class="num">{num}</div>
           <div class="point-content">
-            <div class="point-title">{esc(r['title'])}</div>
-            <div class="point-desc">{esc(r['desc'])}</div>
+            <div class="point-title">{esc(r.get('title',''))}</div>
+            <div class="point-desc">{esc(r.get('desc',''))}</div>
           </div>
         </div>"""
 
@@ -139,9 +148,9 @@ def build_html(data: dict) -> str:
     for p in data.get("peers", []):
         peers_html += f"""
         <div class="peer">
-          <div class="peer-name">{esc(p['name'])}</div>
-          <div class="peer-country">{esc(p['country'])}</div>
-          <div class="peer-desc">{esc(p['desc'])}</div>
+          <div class="peer-name">{esc(p.get('name',''))}</div>
+          <div class="peer-country">{esc(p.get('country',''))}</div>
+          <div class="peer-desc">{esc(p.get('desc',''))}</div>
         </div>"""
 
     attention_html = ""
@@ -199,19 +208,19 @@ def build_html(data: dict) -> str:
 <body>
 <div class="wrap">
   <div class="header">
-    <div class="ticker">{esc(data.get('ticker', ''))}</div>
-    <div class="company">{esc(data.get('company', ''))}</div>
-    <div class="tagline">{esc(data.get('tagline', ''))}</div>
+    <div class="ticker">{esc(data.get('ticker',''))}</div>
+    <div class="company">{esc(data.get('company',''))}</div>
+    <div class="tagline">{esc(data.get('tagline',''))}</div>
   </div>
   <div class="metrics">
     <div class="metric">
       <div class="metric-label">현재가</div>
-      <div class="metric-value">{esc(data.get('current_price', '-'))}</div>
+      <div class="metric-value">{esc(data.get('current_price','-'))}</div>
     </div>
     <div class="metric">
       <div class="metric-label">목표주가</div>
-      <div class="metric-value">{esc(data.get('target_price', '-'))}</div>
-      <div class="metric-sub">{esc(data.get('target_source', ''))}</div>
+      <div class="metric-value">{esc(data.get('target_price','-'))}</div>
+      <div class="metric-sub">{esc(data.get('target_source',''))}</div>
     </div>
     <div class="metric">
       <div class="metric-label">상승여력</div>
@@ -220,7 +229,7 @@ def build_html(data: dict) -> str:
   </div>
   <div class="section">
     <div class="section-title title-blue">비즈니스 모델</div>
-    <div class="bm">{esc(data.get('biz_model', ''))}</div>
+    <div class="bm">{esc(data.get('biz_model',''))}</div>
   </div>
   <div class="section">
     <div class="section-title title-green">투자 포인트</div>
@@ -237,7 +246,7 @@ def build_html(data: dict) -> str:
   </div>
   <div class="section">
     <div class="section-title title-amber">한 줄 요약</div>
-    <div class="bm">{esc(data.get('summary', ''))}</div>
+    <div class="bm">{esc(data.get('summary',''))}</div>
   </div>
   <div class="notice">본 내용은 투자 참고용 분석이며 투자 권유가 아닙니다.</div>
 </div>
@@ -287,7 +296,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = json.loads(match.group())
         data = clean_data(data)
 
-        # 텍스트 먼저 전송
+        # 텍스트 전송
         text = build_text(data)
         await update.message.reply_text(text)
 
@@ -307,7 +316,6 @@ async def main():
     app = ApplicationBuilder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("봇 시작!")
-
     await app.initialize()
     await app.bot.delete_webhook(drop_pending_updates=True)
     await app.start()
