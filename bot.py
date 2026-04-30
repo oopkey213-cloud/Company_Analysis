@@ -22,20 +22,18 @@ FONT_BOLD = "/tmp/font_bold.ttf"
 
 
 def ensure_fonts():
-    items = [
-        (FONT_REG, "https://cdn.jsdelivr.net/gh/google/fonts/ofl/nanumgothic/NanumGothic-Regular.ttf"),
-        (FONT_BOLD, "https://cdn.jsdelivr.net/gh/google/fonts/ofl/nanumgothic/NanumGothic-ExtraBold.ttf"),
-    ]
-    for path, url in items:
-        if not os.path.exists(path) or os.path.getsize(path) < 10000:
-            try:
-                r = requests.get(url, timeout=30)
-                r.raise_for_status()
-                with open(path, 'wb') as fh:
-                    fh.write(r.content)
-                logging.info(f"Font downloaded: {path} ({len(r.content)} bytes)")
-            except Exception as e:
-                logging.error(f"Font download failed: {e}")
+    if not os.path.exists(FONT_REG):
+        r = requests.get(
+            "https://cdn.jsdelivr.net/gh/google/fonts/ofl/nanumgothic/NanumGothic-Regular.ttf",
+            timeout=30
+        )
+        open(FONT_REG, 'wb').write(r.content)
+    if not os.path.exists(FONT_BOLD):
+        r = requests.get(
+            "https://cdn.jsdelivr.net/gh/google/fonts/ofl/nanumgothic/NanumGothic-ExtraBold.ttf",
+            timeout=30
+        )
+        open(FONT_BOLD, 'wb').write(r.content)
 
 
 ensure_fonts()
@@ -405,14 +403,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = json.loads(match.group())
         data = clean_data(data)
 
-        await update.message.reply_text(build_text(data))
-await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-        try:
-            img_buf = Card().render(data)
-            await update.message.reply_photo(photo=img_buf)
-        except Exception as img_err:
-            logging.error(f"Image error: {img_err}", exc_info=True)
-            await update.message.reply_text("(이미지 생성 실패 — 텍스트만 전송됨)")
+await update.message.reply_text(build_text(data))
+        await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+        img_buf = Card().render(data)
+        await update.message.reply_photo(photo=img_buf)
 
     except Exception as e:
         logging.error(f"Error: {e}", exc_info=True)
