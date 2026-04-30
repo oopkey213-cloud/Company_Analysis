@@ -139,7 +139,7 @@ async def main():
     print("봇 시작!")
     async with app:
         await app.start()
-        await app.updater.start_polling()
+await app.updater.start_polling(drop_pending_updates=True)
         await asyncio.Event().wait()  # 영구 실행
 
 
