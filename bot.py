@@ -403,7 +403,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = json.loads(match.group())
         data = clean_data(data)
 
-await update.message.reply_text(build_text(data))
+        await update.message.reply_text(build_text(data))
         await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
         img_buf = Card().render(data)
         await update.message.reply_photo(photo=img_buf)
