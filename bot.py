@@ -1,3 +1,5 @@
+import subprocess
+subprocess.run(["playwright", "install", "chromium"], check=True)
 import os
 import logging
 import asyncio
