@@ -1,20 +1,18 @@
 import os
 import logging
+import asyncio
 import anthropic
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
-# 로깅 설정
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# 클라이언트 초기화
 claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-# 스킬 내용 (system prompt에 직접 삽입)
 SYSTEM_PROMPT = """
 당신은 기업 투자 분석 전문 어시스턴트입니다.
 
@@ -95,21 +93,6 @@ SYSTEM_PROMPT = """
 
 ---
 *본 내용은 투자 참고용 분석이며 투자 권유가 아닙니다.*
-
-## 투자 포인트 선정 기준
-- 단순 성장성보다 구조적 변화, 모멘텀 변곡점, 밸류에이션 리레이팅 요인 우선
-- 제약/바이오: 파이프라인 마일스톤, 임상 단계, 기술수출 가능성 구체적으로 언급
-- 숫자 포함 (YoY 성장률, 마진 변화, 시장점유율 등)
-
-## 리스크 선정 기준
-- "경쟁 심화" 같은 generic 리스크 지양
-- 해당 기업 고유 리스크 (규제, 특정 고객사 의존도, 임상 실패 가능성 등)
-- 발현 시 주가 영향 함께 언급
-
-## 유사 기업 선정 기준
-- 동일 제품/소재 생산 경쟁사 (직접 경쟁)
-- 같은 밸류체인 내 유사 포지션 기업
-- 국내 + 글로벌 각각 최소 1~2개
 """
 
 
@@ -117,11 +100,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     chat_id = update.effective_chat.id
 
-    # 타이핑 표시
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     try:
-        # Claude API 호출 (웹 검색 포함)
         response = claude.messages.create(
             model="claude-sonnet-4-5-20251001",
             max_tokens=4096,
@@ -130,7 +111,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages=[{"role": "user", "content": user_message}]
         )
 
-        # 텍스트 응답 추출
         reply = ""
         for block in response.content:
             if block.type == "text":
@@ -139,7 +119,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not reply:
             reply = "분석 중 오류가 발생했습니다. 다시 시도해주세요."
 
-        # 텔레그램 메시지 길이 제한(4096자) 처리 — 길면 분할 전송
         max_len = 4000
         if len(reply) <= max_len:
             await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
@@ -153,15 +132,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
 
 
-import asyncio
-
-def main():
+async def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = ApplicationBuilder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("봇 시작!")
-    app.run_polling()
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        await asyncio.Event().wait()  # 영구 실행
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
