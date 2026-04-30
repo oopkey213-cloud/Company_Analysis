@@ -4,7 +4,7 @@ import asyncio
 import anthropic
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-from telegram.constants import ParseMode
+from playwright.async_api import async_playwright
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -13,7 +13,7 @@ logging.basicConfig(
 
 claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-SYSTEM_PROMPT = """
+ANALYSIS_PROMPT = """
 당신은 기업 투자 분석 전문 어시스턴트입니다.
 
 ## 핵심 원칙
@@ -22,47 +22,196 @@ SYSTEM_PROMPT = """
 - 웹 검색을 반드시 수행하여 최신 뉴스, 실적, 이슈를 반영
 - 정성적 인사이트 중심 - 숫자 나열보다 "왜 중요한가"에 집중
 
-## 기업 분석 요청 시 반드시 아래 구조로 출력
+## 출력 형식 (반드시 아래 JSON 구조로만 출력, 다른 텍스트 없이)
 
-기업명 (티커) - 한 줄 포지셔닝
-
-비즈니스 모델: [2~3문장]
-
-[투자 포인트]
-1. 포인트 제목: 핵심 근거 한 줄
-2. 포인트 제목: 핵심 근거 한 줄
-3. 포인트 제목: 핵심 근거 한 줄
-
-상세 설명:
-1번: [2~3문장]
-2번: [2~3문장]
-3번: [2~3문장]
-
-[지금 주목받는 이유]
-(해당 없으면 생략)
-
-[리스크]
-1. 리스크 제목: 발현 시 영향 한 줄
-2. 리스크 제목: 발현 시 영향 한 줄
-3. 리스크 제목: 발현 시 영향 한 줄
-
-상세 설명:
-1번: [구체적 시나리오]
-2번: [구체적 시나리오]
-3번: [구체적 시나리오]
-
-[유사 기업]
-- 기업명 (국가): 주력사업 / 비교 포인트
-- 기업명 (국가): 주력사업 / 비교 포인트
-
-[목표주가]
-증권사명 목표가 (현재가 대비 괴리율)
-
-[한 줄 요약]
-투자 매력도와 주의사항 한 문장
-
-*본 내용은 투자 참고용이며 투자 권유가 아닙니다.*
+{
+  "company": "기업명",
+  "ticker": "티커/종목코드",
+  "tagline": "한 줄 포지셔닝",
+  "current_price": "현재가 (원/달러)",
+  "target_price": "목표주가",
+  "upside": "상승여력 %",
+  "target_source": "증권사명 또는 컨센서스",
+  "biz_model": "비즈니스 모델 2~3문장",
+  "points": [
+    {"title": "포인트 제목", "desc": "2~3문장 상세 설명"},
+    {"title": "포인트 제목", "desc": "2~3문장 상세 설명"},
+    {"title": "포인트 제목", "desc": "2~3문장 상세 설명"}
+  ],
+  "attention": "지금 주목받는 이유 (없으면 빈 문자열)",
+  "risks": [
+    {"title": "리스크 제목", "desc": "구체적 시나리오"},
+    {"title": "리스크 제목", "desc": "구체적 시나리오"},
+    {"title": "리스크 제목", "desc": "구체적 시나리오"}
+  ],
+  "peers": [
+    {"name": "기업명", "country": "국가", "desc": "비교 포인트"},
+    {"name": "기업명", "country": "국가", "desc": "비교 포인트"},
+    {"name": "기업명", "country": "국가", "desc": "비교 포인트"},
+    {"name": "기업명", "country": "국가", "desc": "비교 포인트"}
+  ],
+  "summary": "투자 매력도와 주의사항 한 문장"
+}
 """
+
+
+def build_html(data: dict) -> str:
+    def esc(s):
+        return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+    points_html = ""
+    for i, p in enumerate(data.get("points", []), 1):
+        num = ["①", "②", "③"][i - 1] if i <= 3 else str(i)
+        points_html += f"""
+        <div class="point">
+          <div class="num">{num}</div>
+          <div class="point-content">
+            <div class="point-title">{esc(p['title'])}</div>
+            <div class="point-desc">{esc(p['desc'])}</div>
+          </div>
+        </div>"""
+
+    risks_html = ""
+    for i, r in enumerate(data.get("risks", []), 1):
+        num = ["①", "②", "③"][i - 1] if i <= 3 else str(i)
+        risks_html += f"""
+        <div class="point">
+          <div class="num">{num}</div>
+          <div class="point-content">
+            <div class="point-title">{esc(r['title'])}</div>
+            <div class="point-desc">{esc(r['desc'])}</div>
+          </div>
+        </div>"""
+
+    peers_html = ""
+    for p in data.get("peers", []):
+        peers_html += f"""
+        <div class="peer">
+          <div class="peer-name">{esc(p['name'])}</div>
+          <div class="peer-country">{esc(p['country'])}</div>
+          <div class="peer-desc">{esc(p['desc'])}</div>
+        </div>"""
+
+    attention_html = ""
+    if data.get("attention"):
+        attention_html = f"""
+      <div class="section">
+        <div class="section-title title-blue">지금 주목받는 이유</div>
+        <div class="bm">{esc(data['attention'])}</div>
+      </div>"""
+
+    upside = data.get("upside", "")
+    upside_color = "#3B6D11" if "+" in str(upside) else "#A32D2D"
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f8f6; padding: 20px; width: 680px; }}
+  .wrap {{ display: flex; flex-direction: column; gap: 12px; }}
+  .header {{ background: #fff; border: 0.5px solid #e0ddd4; border-radius: 12px; padding: 20px 24px; }}
+  .ticker {{ font-size: 12px; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }}
+  .company {{ font-size: 24px; font-weight: 500; color: #1a1a1a; }}
+  .tagline {{ font-size: 13px; color: #666; margin-top: 6px; }}
+  .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }}
+  .metric {{ background: #fff; border: 0.5px solid #e0ddd4; border-radius: 8px; padding: 14px 16px; }}
+  .metric-label {{ font-size: 11px; color: #999; margin-bottom: 4px; }}
+  .metric-value {{ font-size: 20px; font-weight: 500; color: #1a1a1a; }}
+  .metric-sub {{ font-size: 11px; color: #aaa; margin-top: 2px; }}
+  .section {{ background: #fff; border: 0.5px solid #e0ddd4; border-radius: 12px; overflow: hidden; }}
+  .section-title {{ font-size: 11px; font-weight: 500; padding: 8px 16px; letter-spacing: 0.06em; text-transform: uppercase; }}
+  .title-green {{ background: #EAF3DE; color: #3B6D11; }}
+  .title-red {{ background: #FCEBEB; color: #A32D2D; }}
+  .title-blue {{ background: #E6F1FB; color: #185FA5; }}
+  .title-amber {{ background: #FAEEDA; color: #854F0B; }}
+  .title-purple {{ background: #EEEDFE; color: #534AB7; }}
+  .bm {{ padding: 14px 16px; font-size: 13px; color: #555; line-height: 1.6; }}
+  .point {{ display: flex; gap: 12px; padding: 12px 16px; border-top: 0.5px solid #f0ede4; }}
+  .point:first-of-type {{ border-top: none; }}
+  .num {{ font-size: 13px; font-weight: 500; min-width: 18px; color: #aaa; padding-top: 1px; }}
+  .point-content {{ flex: 1; }}
+  .point-title {{ font-size: 13px; font-weight: 500; color: #1a1a1a; margin-bottom: 3px; }}
+  .point-desc {{ font-size: 12px; color: #666; line-height: 1.55; }}
+  .peers {{ display: grid; grid-template-columns: repeat(2, 1fr); }}
+  .peer {{ padding: 10px 16px; border-top: 0.5px solid #f0ede4; }}
+  .peer:nth-child(odd) {{ border-right: 0.5px solid #f0ede4; }}
+  .peer:nth-child(1), .peer:nth-child(2) {{ border-top: none; }}
+  .peer-name {{ font-size: 13px; font-weight: 500; color: #1a1a1a; }}
+  .peer-country {{ font-size: 11px; color: #aaa; }}
+  .peer-desc {{ font-size: 12px; color: #666; margin-top: 2px; }}
+  .notice {{ font-size: 11px; color: #bbb; text-align: center; padding-top: 4px; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="ticker">{esc(data.get('ticker', ''))}</div>
+    <div class="company">{esc(data.get('company', ''))}</div>
+    <div class="tagline">{esc(data.get('tagline', ''))}</div>
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-label">현재가</div>
+      <div class="metric-value">{esc(data.get('current_price', '-'))}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">목표주가</div>
+      <div class="metric-value">{esc(data.get('target_price', '-'))}</div>
+      <div class="metric-sub">{esc(data.get('target_source', ''))}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">상승여력</div>
+      <div class="metric-value" style="color:{upside_color};">{esc(upside)}</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title title-blue">비즈니스 모델</div>
+    <div class="bm">{esc(data.get('biz_model', ''))}</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title title-green">투자 포인트</div>
+    {points_html}
+  </div>
+
+  {attention_html}
+
+  <div class="section">
+    <div class="section-title title-red">리스크</div>
+    {risks_html}
+  </div>
+
+  <div class="section">
+    <div class="section-title title-purple">유사 기업</div>
+    <div class="peers">
+      {peers_html}
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title title-amber">한 줄 요약</div>
+    <div class="bm">{esc(data.get('summary', ''))}</div>
+  </div>
+
+  <div class="notice">본 내용은 투자 참고용 분석이며 투자 권유가 아닙니다.</div>
+</div>
+</body>
+</html>"""
+
+
+async def html_to_image(html: str) -> bytes:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        page = await browser.new_page(viewport={"width": 720, "height": 1200})
+        await page.set_content(html, wait_until="domcontentloaded")
+        await page.wait_for_timeout(300)
+        img = await page.screenshot(full_page=True)
+        await browser.close()
+        return img
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,44 +219,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    await update.message.reply_text("분석 중입니다... 30~60초 소요됩니다 ⏳")
 
     try:
         response = claude.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=ANALYSIS_PROMPT,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": user_message}]
         )
 
-        reply = ""
+        raw = ""
         for block in response.content:
             if block.type == "text":
-                reply += block.text
+                raw += block.text
 
-        if not reply:
-            reply = "분석 중 오류가 발생했습니다. 다시 시도해주세요."
+        import json, re
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not match:
+            await update.message.reply_text("분석 데이터를 파싱하지 못했습니다. 다시 시도해주세요.")
+            return
 
-        max_len = 4000
-        if len(reply) <= max_len:
-            await update.message.reply_text(reply)
-        else:
-            chunks = [reply[i:i+max_len] for i in range(0, len(reply), max_len)]
-            for chunk in chunks:
-                await update.message.reply_text(chunk)
+        data = json.loads(match.group())
+        html = build_html(data)
+        img_bytes = await html_to_image(html)
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+        await update.message.reply_photo(photo=img_bytes)
 
     except Exception as e:
         logging.error(f"Error: {e}")
-        await update.message.reply_text(f"오류: {str(e)}")
+        await update.message.reply_text(f"오류가 발생했습니다: {str(e)}")
 
 
 async def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    app = (
-        ApplicationBuilder()
-        .token(token)
-        .build()
-    )
+    app = ApplicationBuilder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("봇 시작!")
     async with app:
