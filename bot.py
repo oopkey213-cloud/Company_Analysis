@@ -282,7 +282,7 @@ def create_image(data) -> bytes:
 
     final = img.crop((0, 0, W, y + PAD))
     buf = io.BytesIO()
-    final.save(buf, format='JPEG', quality=90)
+final.save(buf, format='PNG')
     buf.seek(0)
     return buf.getvalue()
 
