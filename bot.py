@@ -33,9 +33,7 @@ ANALYSIS_PROMPT = """
   "company": "기업명",
   "ticker": "티커/종목코드",
   "tagline": "한 줄 포지셔닝",
-  "current_price": "현재가",
   "target_price": "목표주가",
-  "upside": "상승여력 (예: +51%)",
   "target_source": "증권사명",
   "biz_model": "비즈니스 모델 2~3문장",
   "points": [
