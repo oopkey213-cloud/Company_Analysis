@@ -155,13 +155,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 import asyncio
 
-async def main():
+def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = ApplicationBuilder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("봇 시작!")
-    await app.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
