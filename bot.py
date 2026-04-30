@@ -1,48 +1,37 @@
-import os
-import re
-import json
-import logging
-import asyncio
-import io
-import requests
-import anthropic
+import os, re, json, logging, asyncio, io, tempfile, anthropic
 from PIL import Image, ImageDraw, ImageFont
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-FONT_REG = "/tmp/font_reg.ttf"
-FONT_BOLD = "/tmp/font_bold.ttf"
+def find_font():
+    candidates = [
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            logging.info(f"Using font: {p}")
+            return p
+    logging.warning("No font found, will use default")
+    return None
 
+FONT_PATH = find_font()
 
-def ensure_fonts():
-    if not os.path.exists(FONT_REG):
-        r = requests.get(
-            "https://cdn.jsdelivr.net/gh/google/fonts/ofl/nanumgothic/NanumGothic-Regular.ttf",
-            timeout=30
-        )
-        open(FONT_REG, 'wb').write(r.content)
-    if not os.path.exists(FONT_BOLD):
-        r = requests.get(
-            "https://cdn.jsdelivr.net/gh/google/fonts/ofl/nanumgothic/NanumGothic-ExtraBold.ttf",
-            timeout=30
-        )
-        open(FONT_BOLD, 'wb').write(r.content)
-
-
-ensure_fonts()
-
-
-def f(size, bold=False):
-    path = FONT_BOLD if bold else FONT_REG
-    return ImageFont.truetype(path, size)
-
+def get_font(size):
+    if FONT_PATH:
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except Exception as e:
+            logging.error(f"Font load error ({FONT_PATH}): {e}")
+    try:
+        return ImageFont.load_default(size=size)
+    except:
+        return ImageFont.load_default()
 
 ANALYSIS_PROMPT = """
 당신은 기업 투자 분석 전문 어시스턴트입니다.
@@ -61,9 +50,9 @@ ANALYSIS_PROMPT = """
   "ticker": "티커/종목코드",
   "tagline": "한 줄 포지셔닝",
   "quick_summary": [
-    "선결론 1줄 - 핵심 투자 매력 (예: 반도체 사이클 턴어라운드 수혜 최선호주)",
-    "선결론 2줄 - 현재 상황/모멘텀 (예: 2025년 영업이익 흑자전환 확실시, 주가 저점 탈출 구간)",
-    "선결론 3줄 - 리스크/주의사항 (예: 중국 경쟁 심화로 마진 압박 지속, 단기 변동성 주의)"
+    "선결론 1줄 - 핵심 투자 매력",
+    "선결론 2줄 - 현재 상황/모멘텀",
+    "선결론 3줄 - 리스크/주의사항"
   ],
   "biz_model": "비즈니스 모델 2~3문장",
   "points": [
@@ -87,29 +76,25 @@ ANALYSIS_PROMPT = """
 }
 """
 
-
-def strip_tags(text: str) -> str:
+def strip_tags(text):
     return re.sub(r'<[^>]+>', '', str(text)).strip()
 
-
-def clean_data(data: dict) -> dict:
+def clean_data(data):
     def clean(v):
-        if isinstance(v, str):
-            return strip_tags(v)
-        if isinstance(v, list):
-            return [clean(i) for i in v]
-        if isinstance(v, dict):
-            return {k: clean(vv) for k, vv in v.items()}
+        if isinstance(v, str): return strip_tags(v)
+        if isinstance(v, list): return [clean(i) for i in v]
+        if isinstance(v, dict): return {k: clean(vv) for k, vv in v.items()}
         return v
     return {k: clean(v) for k, v in data.items()}
 
-
 def wrap_text(text, font, max_width, draw):
-    lines = []
-    line = ""
+    lines, line = [], ""
     for char in str(text):
         test = line + char
-        w = draw.textlength(test, font=font)
+        try:
+            w = draw.textlength(test, font=font)
+        except:
+            w = len(test) * 13
         if w > max_width and line:
             lines.append(line)
             line = char
@@ -117,269 +102,211 @@ def wrap_text(text, font, max_width, draw):
             line = test
     if line:
         lines.append(line)
-    return lines
+    return lines or [""]
 
+def get_line_height(font):
+    try:
+        bbox = font.getbbox("Ag가나")
+        return bbox[3] - bbox[1] + 2
+    except:
+        return 18
 
-def text_height(font):
-    bbox = font.getbbox("가나다")
-    return bbox[3] - bbox[1]
-
-
-class Card:
+def create_image(data) -> bytes:
     W = 720
     PAD = 20
     IP = 16
-    GAP = 10
+    GAP = 8
 
     BG = (248, 248, 246)
     WHITE = (255, 255, 255)
-    BORDER = (224, 221, 212)
-    INNER = (240, 237, 228)
-    TEXT1 = (26, 26, 26)
-    TEXT2 = (85, 85, 85)
-    TEXT3 = (153, 153, 153)
+    BORDER = (220, 217, 208)
+    INNER = (238, 235, 226)
+    T1 = (26, 26, 26)
+    T2 = (85, 85, 85)
+    T3 = (150, 150, 150)
 
-    SECTIONS = {
-        'green':  ((234, 243, 222), (59, 109, 17)),
-        'red':    ((252, 235, 235), (163, 45, 45)),
-        'blue':   ((230, 241, 251), (24, 95, 165)),
-        'amber':  ((250, 238, 218), (133, 79, 11)),
-        'purple': ((238, 237, 254), (83, 74, 183)),
-        'gray':   ((241, 239, 232), (95, 94, 90)),
-        'teal':   ((225, 245, 238), (15, 110, 86)),
+    COLORS = {
+        'teal':   ((220, 245, 235), (15, 110, 86)),
+        'blue':   ((228, 240, 252), (24, 95, 165)),
+        'green':  ((232, 244, 220), (55, 105, 15)),
+        'red':    ((252, 233, 233), (160, 40, 40)),
+        'purple': ((236, 235, 254), (80, 70, 180)),
+        'amber':  ((250, 236, 215), (130, 75, 10)),
     }
 
-    def __init__(self):
-        self.img = Image.new('RGB', (self.W, 4000), self.BG)
-        self.draw = ImageDraw.Draw(self.img)
-        self.y = self.PAD
+    fn_sm = get_font(11)
+    fn_reg = get_font(13)
+    fn_md = get_font(14)
+    fn_bold = get_font(14)
+    fn_title = get_font(22)
 
-    def rect(self, x, y, w, h, fill, border=None, radius=8):
-        self.draw.rounded_rectangle(
-            [x, y, x + w, y + h],
-            radius=radius, fill=fill,
-            outline=border or self.BORDER, width=1
-        )
+    lh_sm = get_line_height(fn_sm)
+    lh_reg = get_line_height(fn_reg)
+    lh_bold = get_line_height(fn_bold)
 
-    def section_header(self, x, y, w, label, color_key):
-        bg, fg = self.SECTIONS[color_key]
-        self.draw.rectangle([x, y, x + w, y + 26], fill=bg)
-        self.draw.text((x + self.IP, y + 6), label, font=f(11, True), fill=fg)
+    img = Image.new('RGB', (W, 5000), BG)
+    draw = ImageDraw.Draw(img)
+    y = PAD
+
+    def hdr_block(label, color_key):
+        bg, fg = COLORS[color_key]
+        draw.rectangle([PAD, y, W-PAD, y+26], fill=bg)
+        draw.text((PAD+IP, y+6), label, font=fn_sm, fill=fg)
         return 26
 
-    def draw_header(self, data):
-        h = 82
-        self.rect(self.PAD, self.y, self.W - self.PAD * 2, h, self.WHITE)
-        x = self.PAD + self.IP
-        self.draw.text((x, self.y + 10), data.get('ticker', ''), font=f(11), fill=self.TEXT3)
-        self.draw.text((x, self.y + 24), data.get('company', ''), font=f(22, True), fill=self.TEXT1)
-        lines = wrap_text(data.get('tagline', ''), f(12), self.W - self.PAD * 2 - self.IP * 2, self.draw)
-        ty = self.y + 54
+    def card_bg(x, cy, w, h):
+        draw.rectangle([x, cy, x+w, cy+h], fill=WHITE, outline=BORDER, width=1)
+
+    def text_section(label, color_key, text):
+        nonlocal y
+        inner_w = W - PAD*2 - IP*2
+        lines = wrap_text(text, fn_reg, inner_w, draw)
+        h = 26 + len(lines)*lh_reg + 16
+        card_bg(PAD, y, W-PAD*2, h)
+        hb = hdr_block(label, color_key)
+        iy = y + hb + 8
         for line in lines:
-            self.draw.text((x, ty), line, font=f(12), fill=self.TEXT2)
-            ty += text_height(f(12)) + 3
-        self.y += h + self.GAP
+            draw.text((PAD+IP, iy), line, font=fn_reg, fill=T2)
+            iy += lh_reg
+        y += h + GAP
 
-    def draw_quick_summary(self, items):
-        x = self.PAD
-        w = self.W - self.PAD * 2
-        fn = f(13)
-        lh = text_height(fn)
-        icons = ["✦", "✦", "✦"]
-        icon_colors = [(24, 95, 165), (59, 109, 17), (163, 45, 45)]
-
+    def points_section(label, color_key, items):
+        nonlocal y
+        nums = ["①","②","③","④","⑤"]
+        inner_w = W - PAD*2 - IP*2 - 22
         all_lines = []
         for item in items:
-            lines = wrap_text(item, fn, w - self.IP * 2 - 18, self.draw)
-            all_lines.append(lines)
-
-        total_h = 26
-        for lines in all_lines:
-            total_h += len(lines) * (lh + 3) + 12
-
-        self.rect(x, self.y, w, total_h, self.WHITE)
-        self.section_header(x, self.y, w, '선결론 3줄 요약', 'teal')
-        iy = self.y + 26
-
-        for i, (item, lines) in enumerate(zip(items, all_lines)):
-            if i > 0:
-                self.draw.line([(x + self.IP, iy), (x + w - self.IP, iy)], fill=self.INNER, width=1)
-            iy += 8
-            icon = icons[i] if i < len(icons) else "•"
-            color = icon_colors[i] if i < len(icon_colors) else self.TEXT3
-            self.draw.text((x + self.IP, iy + 1), icon, font=f(12, True), fill=color)
-            tx = x + self.IP + 18
-            for line in lines:
-                self.draw.text((tx, iy), line, font=fn, fill=self.TEXT1)
-                iy += lh + 3
-            iy += 6
-
-        self.y += total_h + self.GAP
-
-    def draw_text_section(self, label, color_key, text):
-        x = self.PAD
-        w = self.W - self.PAD * 2
-        fn = f(12)
-        lines = wrap_text(text, fn, w - self.IP * 2, self.draw)
-        lh = text_height(fn)
-        total_h = 26 + len(lines) * (lh + 3) + 18
-        self.rect(x, self.y, w, total_h, self.WHITE)
-        self.section_header(x, self.y, w, label, color_key)
-        iy = self.y + 26 + 10
-        for line in lines:
-            self.draw.text((x + self.IP, iy), line, font=fn, fill=self.TEXT2)
-            iy += lh + 3
-        self.y += total_h + self.GAP
-
-    def draw_points_section(self, label, color_key, items):
-        x = self.PAD
-        w = self.W - self.PAD * 2
-        nums = ["①", "②", "③", "④", "⑤"]
-        fn_title = f(13, True)
-        fn_desc = f(12)
-        lh_t = text_height(fn_title)
-        lh_d = text_height(fn_desc)
-        inner_w = w - self.IP * 2 - 22
-
-        all_lines = []
-        for item in items:
-            tl = wrap_text(item.get('title', ''), fn_title, inner_w, self.draw)
-            dl = wrap_text(item.get('desc', ''), fn_desc, inner_w, self.draw)
+            tl = wrap_text(item.get('title',''), fn_bold, inner_w, draw)
+            dl = wrap_text(item.get('desc',''), fn_reg, inner_w, draw)
             all_lines.append((tl, dl))
-
-        total_h = 26
-        for tl, dl in all_lines:
-            total_h += len(tl) * (lh_t + 3) + len(dl) * (lh_d + 3) + 22
-
-        self.rect(x, self.y, w, total_h, self.WHITE)
-        self.section_header(x, self.y, w, label, color_key)
-        iy = self.y + 26
-
-        for i, (item, (tlines, dlines)) in enumerate(zip(items, all_lines)):
+        h = 26 + sum(len(tl)*lh_bold + len(dl)*lh_reg + 20 for tl, dl in all_lines)
+        card_bg(PAD, y, W-PAD*2, h)
+        hdr_block(label, color_key)
+        iy = y + 26
+        for i, (item, (tl, dl)) in enumerate(zip(items, all_lines)):
             if i > 0:
-                self.draw.line([(x + self.IP, iy), (x + w - self.IP, iy)], fill=self.INNER, width=1)
-            iy += 10
-            num = nums[i] if i < len(nums) else str(i + 1)
-            self.draw.text((x + self.IP, iy), num, font=fn_title, fill=self.TEXT3)
-            tx = x + self.IP + 22
-            for line in tlines:
-                self.draw.text((tx, iy), line, font=fn_title, fill=self.TEXT1)
-                iy += lh_t + 3
-            iy += 2
-            for line in dlines:
-                self.draw.text((tx, iy), line, font=fn_desc, fill=self.TEXT2)
-                iy += lh_d + 3
+                draw.line([(PAD+IP, iy), (W-PAD-IP, iy)], fill=INNER, width=1)
             iy += 8
+            num = nums[i] if i < len(nums) else str(i+1)
+            draw.text((PAD+IP, iy), num, font=fn_bold, fill=T3)
+            tx = PAD + IP + 22
+            for line in tl:
+                draw.text((tx, iy), line, font=fn_bold, fill=T1)
+                iy += lh_bold
+            iy += 2
+            for line in dl:
+                draw.text((tx, iy), line, font=fn_reg, fill=T2)
+                iy += lh_reg
+            iy += 8
+        y += h + GAP
 
-        self.y += total_h + self.GAP
+    # Header
+    hdr_h = 84
+    card_bg(PAD, y, W-PAD*2, hdr_h)
+    draw.text((PAD+IP, y+10), data.get('ticker',''), font=fn_sm, fill=T3)
+    draw.text((PAD+IP, y+24), data.get('company',''), font=fn_title, fill=T1)
+    taglines = wrap_text(data.get('tagline',''), fn_reg, W-PAD*2-IP*2, draw)
+    ty = y + 54
+    for line in taglines:
+        draw.text((PAD+IP, ty), line, font=fn_reg, fill=T2)
+        ty += lh_reg
+    y += hdr_h + GAP
 
-    def draw_peers(self, peers):
-        x = self.PAD
-        w = self.W - self.PAD * 2
-        hw = (w - 1) // 2
-        fn_name = f(13, True)
-        fn_country = f(11)
-        fn_desc = f(12)
-        lh_n = text_height(fn_name)
-        lh_c = text_height(fn_country)
-        lh_d = text_height(fn_desc)
+    # Quick summary
+    qs = data.get('quick_summary', [])
+    ic = [(24,95,165),(59,109,17),(163,45,45)]
+    qs_lines = [wrap_text(s, fn_reg, W-PAD*2-IP*2-18, draw) for s in qs]
+    qs_h = 26 + sum(len(ll)*lh_reg + 14 for ll in qs_lines)
+    card_bg(PAD, y, W-PAD*2, qs_h)
+    hdr_block('선결론 3줄 요약', 'teal')
+    iy = y + 26
+    for i, (s, lines) in enumerate(zip(qs, qs_lines)):
+        if i > 0:
+            draw.line([(PAD+IP, iy), (W-PAD-IP, iy)], fill=INNER, width=1)
+        iy += 6
+        color = ic[i] if i < len(ic) else T3
+        draw.text((PAD+IP, iy+1), "▶", font=fn_sm, fill=color)
+        tx = PAD + IP + 16
+        for line in lines:
+            draw.text((tx, iy), line, font=fn_reg, fill=T1)
+            iy += lh_reg
+        iy += 6
+    y += qs_h + GAP
 
-        def cell_h(p):
-            dl = wrap_text(p.get('desc', ''), fn_desc, hw - self.IP * 2, self.draw)
-            return lh_n + 4 + lh_c + 4 + len(dl) * (lh_d + 3) + 20
+    text_section('비즈니스 모델', 'blue', data.get('biz_model',''))
+    points_section('투자 포인트', 'green', data.get('points',[]))
+    if data.get('attention'):
+        text_section('지금 주목받는 이유', 'blue', data.get('attention',''))
+    points_section('리스크', 'red', data.get('risks',[]))
 
-        rows = [peers[i:i+2] for i in range(0, len(peers), 2)]
-        row_heights = [max(cell_h(p) for p in row) for row in rows]
-        total_h = 26 + sum(row_heights)
+    # Peers
+    peers = data.get('peers', [])
+    hw = (W - PAD*2 - 1) // 2
+    peer_lines = []
+    for p in peers:
+        dl = wrap_text(p.get('desc',''), fn_reg, hw-IP*2, draw)
+        ph = get_line_height(fn_md) + 4 + lh_sm + 4 + len(dl)*lh_reg + 20
+        peer_lines.append((dl, ph))
+    rows = [(peers[i:i+2], peer_lines[i:i+2]) for i in range(0, len(peers), 2)]
+    peer_h = 26 + sum(max(ph for _, ph in row[1]) for row in rows)
+    card_bg(PAD, y, W-PAD*2, peer_h)
+    hdr_block('유사 기업', 'purple')
+    iy = y + 26
+    for row_peers, row_lines in rows:
+        rh = max(ph for _, ph in row_lines)
+        draw.line([(PAD, iy), (W-PAD, iy)], fill=INNER, width=1)
+        for ci, (p, (dl, ph)) in enumerate(zip(row_peers, row_lines)):
+            cx = PAD + ci*(hw+1)
+            if ci == 1:
+                draw.line([(PAD+hw, iy), (PAD+hw, iy+rh)], fill=INNER, width=1)
+            py = iy + 8
+            draw.text((cx+IP, py), p.get('name',''), font=fn_md, fill=T1)
+            py += get_line_height(fn_md) + 2
+            draw.text((cx+IP, py), p.get('country',''), font=fn_sm, fill=T3)
+            py += lh_sm + 4
+            for line in dl:
+                draw.text((cx+IP, py), line, font=fn_reg, fill=T2)
+                py += lh_reg
+        iy += rh
+    y += peer_h + GAP
 
-        self.rect(x, self.y, w, total_h, self.WHITE)
-        self.section_header(x, self.y, w, '유사 기업', 'purple')
-        iy = self.y + 26
+    text_section('한 줄 요약', 'amber', data.get('summary',''))
 
-        for ri, (row, rh) in enumerate(zip(rows, row_heights)):
-            if ri > 0:
-                self.draw.line([(x, iy), (x + w, iy)], fill=self.INNER, width=1)
-            for ci, peer in enumerate(row):
-                cx = x + ci * (hw + 1)
-                if ci == 1:
-                    self.draw.line([(x + hw, iy), (x + hw, iy + rh)], fill=self.INNER, width=1)
-                py = iy + 10
-                self.draw.text((cx + self.IP, py), peer.get('name', ''), font=fn_name, fill=self.TEXT1)
-                py += lh_n + 4
-                self.draw.text((cx + self.IP, py), peer.get('country', ''), font=fn_country, fill=self.TEXT3)
-                py += lh_c + 4
-                dl = wrap_text(peer.get('desc', ''), fn_desc, hw - self.IP * 2, self.draw)
-                for line in dl:
-                    self.draw.text((cx + self.IP, py), line, font=fn_desc, fill=self.TEXT2)
-                    py += lh_d + 3
-            iy += rh
+    notice = "본 내용은 투자 참고용 분석이며 투자 권유가 아닙니다."
+    try:
+        nw = draw.textlength(notice, font=fn_sm)
+    except:
+        nw = 300
+    draw.text(((W-nw)//2, y+4), notice, font=fn_sm, fill=T3)
+    y += 24
 
-        self.y += total_h + self.GAP
+    final = img.crop((0, 0, W, y + PAD))
+    buf = io.BytesIO()
+    final.save(buf, format='JPEG', quality=90)
+    buf.seek(0)
+    return buf.getvalue()
 
-    def draw_notice(self):
-        notice = "본 내용은 투자 참고용 분석이며 투자 권유가 아닙니다."
-        tw = self.draw.textlength(notice, font=f(11))
-        self.draw.text(((self.W - tw) // 2, self.y), notice, font=f(11), fill=self.TEXT3)
-        self.y += 20
-
-    def render(self, data) -> io.BytesIO:
-        self.draw_header(data)
-        self.draw_quick_summary(data.get('quick_summary', []))
-        self.draw_text_section('비즈니스 모델', 'blue', data.get('biz_model', ''))
-        self.draw_points_section('투자 포인트', 'green', data.get('points', []))
-        if data.get('attention'):
-            self.draw_text_section('지금 주목받는 이유', 'blue', data.get('attention', ''))
-        self.draw_points_section('리스크', 'red', data.get('risks', []))
-        self.draw_peers(data.get('peers', []))
-        self.draw_text_section('한 줄 요약', 'amber', data.get('summary', ''))
-        self.draw_notice()
-
-        final = self.img.crop((0, 0, self.W, self.y + self.PAD))
-        buf = io.BytesIO()
-        final.save(buf, format='JPEG', quality=90)
-        buf.seek(0)
-        return buf
-
-
-def build_text(data: dict) -> str:
-    nums = ["①", "②", "③", "④", "⑤"]
-    quick = "\n".join(
-        f"{'💡🟢🔴'[i] if i < 3 else '•'} {s}"
-        for i, s in enumerate(data.get('quick_summary', []))
-    )
-    points = "\n\n".join(
-        f"{nums[i] if i < len(nums) else i+1} {p.get('title','')}\n{p.get('desc','')}"
-        for i, p in enumerate(data.get('points', []))
-    )
-    risks = "\n\n".join(
-        f"{nums[i] if i < len(nums) else i+1} {r.get('title','')}\n{r.get('desc','')}"
-        for i, r in enumerate(data.get('risks', []))
-    )
-    peers = "\n".join(
-        f"• {p.get('name','')} ({p.get('country','')}): {p.get('desc','')}"
-        for p in data.get('peers', [])
-    )
+def build_text(data):
+    nums = ["①","②","③","④","⑤"]
+    quick = "\n".join(f"{'💡🟢🔴'[i] if i<3 else '•'} {s}" for i,s in enumerate(data.get('quick_summary',[])))
+    points = "\n\n".join(f"{nums[i] if i<len(nums) else i+1} {p.get('title','')}\n{p.get('desc','')}" for i,p in enumerate(data.get('points',[])))
+    risks = "\n\n".join(f"{nums[i] if i<len(nums) else i+1} {r.get('title','')}\n{r.get('desc','')}" for i,r in enumerate(data.get('risks',[])))
+    peers = "\n".join(f"• {p.get('name','')} ({p.get('country','')}): {p.get('desc','')}" for p in data.get('peers',[]))
     attention = f"\n🔍 지금 주목받는 이유\n{data.get('attention','')}\n" if data.get('attention') else ""
-    return (
-        f"{'='*30}\n{data.get('company','')} ({data.get('ticker','')})\n"
-        f"{data.get('tagline','')}\n{'='*30}\n\n"
-        f"📋 선결론 3줄 요약\n{quick}\n\n"
-        f"📌 비즈니스 모델\n{data.get('biz_model','')}\n\n"
-        f"📈 투자 포인트\n{points}\n{attention}\n"
-        f"⚠️ 리스크\n{risks}\n\n"
-        f"🌏 유사 기업\n{peers}\n\n"
-        f"💡 한 줄 요약\n{data.get('summary','')}\n\n"
-        f"*본 내용은 투자 참고용이며 투자 권유가 아닙니다.*"
-    )
-
+    return (f"{'='*30}\n{data.get('company','')} ({data.get('ticker','')})\n{data.get('tagline','')}\n{'='*30}\n\n"
+            f"📋 선결론 3줄 요약\n{quick}\n\n"
+            f"📌 비즈니스 모델\n{data.get('biz_model','')}\n\n"
+            f"📈 투자 포인트\n{points}\n{attention}\n"
+            f"⚠️ 리스크\n{risks}\n\n"
+            f"🌏 유사 기업\n{peers}\n\n"
+            f"💡 한 줄 요약\n{data.get('summary','')}\n\n"
+            f"*본 내용은 투자 참고용이며 투자 권유가 아닙니다.*")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     chat_id = update.effective_chat.id
-
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     await update.message.reply_text("분석 중입니다... 30~60초 소요됩니다 ⏳")
-
     try:
         response = claude.messages.create(
             model="claude-sonnet-4-6",
@@ -388,30 +315,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": user_message}]
         )
-
         raw = ""
         for block in response.content:
             if block.type == "text":
                 raw += block.text
-
         raw = re.sub(r'<[^>]+>', '', raw).strip()
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if not match:
             await update.message.reply_text("분석 데이터를 파싱하지 못했습니다. 다시 시도해주세요.")
             return
-
         data = json.loads(match.group())
         data = clean_data(data)
-
         await update.message.reply_text(build_text(data))
         await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
-        img_buf = Card().render(data)
-        await update.message.reply_photo(photo=img_buf)
-
+        img_bytes = create_image(data)
+        await update.message.reply_photo(photo=io.BytesIO(img_bytes))
     except Exception as e:
         logging.error(f"Error: {e}", exc_info=True)
         await update.message.reply_text(f"오류가 발생했습니다: {str(e)}")
-
 
 async def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -423,7 +344,6 @@ async def main():
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message"])
     await asyncio.Event().wait()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
