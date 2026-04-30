@@ -217,7 +217,110 @@ async def html_to_image(html: str) -> bytes:
         return img
 
 
+def clean_cite(text: str) -> str:
+    import re
+    text = re.sub(r'<cite[^>]*>', '', text)
+    text = re.sub(r'</cite>', '', text)
+    return text.strip()
+
+
+def clean_data(data: dict) -> dict:
+    data['tagline'] = clean_cite(data.get('tagline', ''))
+    data['biz_model'] = clean_cite(data.get('biz_model', ''))
+    data['attention'] = clean_cite(data.get('attention', ''))
+    data['summary'] = clean_cite(data.get('summary', ''))
+    for p in data.get('points', []):
+        p['title'] = clean_cite(p.get('title', ''))
+        p['desc'] = clean_cite(p.get('desc', ''))
+    for r in data.get('risks', []):
+        r['title'] = clean_cite(r.get('title', ''))
+        r['desc'] = clean_cite(r.get('desc', ''))
+    return data
+
+
+def build_text(data: dict) -> str:
+    points = "\n".join([
+        f"{'①②③'[i]}  {p['title']}\n{p['desc']}"
+        for i, p in enumerate(data.get('points', []))
+    ])
+    risks = "\n".join([
+        f"{'①②③'[i]}  {r['title']}\n{r['desc']}"
+        for i, r in enumerate(data.get('risks', []))
+    ])
+    peers = "\n".join([
+        f"- {p['name']} ({p['country']}): {p['desc']}"
+        for p in data.get('peers', [])
+    ])
+    attention = f"\n🔍 지금 주목받는 이유\n{data['attention']}\n" if data.get('attention') else ""
+
+    return f"""
+{data.get('company', '')} ({data.get('ticker', '')})
+{data.get('tagline', '')}
+
+현재가 {data.get('current_price', '-')}  |  목표주가 {data.get('target_price', '-')} ({data.get('target_source', '')})  |  상승여력 {data.get('upside', '-')}
+
+📌 비즈니스 모델
+{data.get('biz_model', '')}
+
+📈 투자 포인트
+{points}
+{attention}
+⚠️ 리스크
+{risks}
+
+🌏 유사 기업
+{peers}
+
+💡 한 줄 요약
+{data.get('summary', '')}
+
+*본 내용은 투자 참고용이며 투자 권유가 아닙니다.*
+""".strip()
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    await update.message.reply_text("분석 중입니다... 30~60초 소요됩니다 ⏳")
+
+    try:
+        response = claude.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            system=ANALYSIS_PROMPT,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": user_message}]
+        )
+
+        raw = ""
+        for block in response.content:
+            if block.type == "text":
+                raw += block.text
+
+        import json, re
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not match:
+            await update.message.reply_text("분석 데이터를 파싱하지 못했습니다. 다시 시도해주세요.")
+            return
+
+        data = json.loads(match.group())
+        data = clean_data(data)
+
+        # 텍스트 전송
+        text = build_text(data)
+        await update.message.reply_text(text)
+
+        # 이미지 전송
+        await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+        html = build_html(data)
+        img_bytes = await html_to_image(html)
+        await update.message.reply_photo(photo=img_bytes)
+
+    except Exception as e:
+        logging.error(f"Error: {e}")
+        await update.message.reply_text(f"오류가 발생했습니다: {str(e)}")
     user_message = update.message.text
     chat_id = update.effective_chat.id
 
