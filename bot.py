@@ -24,6 +24,9 @@ ANALYSIS_PROMPT = """
 - 사용자는 투자 자격증 보유 현직 의사로, 투자 기초 설명은 불필요
 - 기관 리포트 수준의 밀도와 시각으로 작성
 - 웹 검색을 반드시 수행하여 최신 뉴스, 실적, 이슈를 반영 (최대 3회)
+- 현재가는 반드시 웹 검색으로 오늘 기준 실시간 주가를 확인하여 기재. 모를 경우 "확인 필요"로 표기
+- 목표주가는 최근 6개월 내 증권사 리포트 기준. 없으면 "미집계"로 표기
+- 오래된 데이터는 절대 사용 금지
 - 정성적 인사이트 중심
 
 ## 출력 형식
@@ -33,7 +36,9 @@ ANALYSIS_PROMPT = """
   "company": "기업명",
   "ticker": "티커/종목코드",
   "tagline": "한 줄 포지셔닝",
+  "current_price": "현재가",
   "target_price": "목표주가",
+  "upside": "상승여력 (예: +51%)",
   "target_source": "증권사명",
   "biz_model": "비즈니스 모델 2~3문장",
   "points": [
@@ -168,11 +173,13 @@ def build_html(data: dict) -> str:
 <html>
 <head>
 <meta charset="UTF-8">
+<head>
+<meta charset="UTF-8">
 <style>
-  @font-face {
+  @font-face {{
     font-family: 'NotoSansKR';
     src: url('https://cdn.jsdelivr.net/gh/google/fonts/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf');
-  }
+  }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{ font-family: 'NotoSansKR', sans-serif;
   .wrap {{ display: flex; flex-direction: column; gap: 12px; }}
@@ -262,8 +269,8 @@ async def html_to_image(html: str) -> bytes:
     async with async_playwright() as p:
         browser = await p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
         page = await browser.new_page(viewport={"width": 720, "height": 1200})
-        await page.set_content(html, wait_until="domcontentloaded")
-        await page.wait_for_timeout(500)
+await page.set_content(html, wait_until="networkidle")
+await page.wait_for_timeout(1000)
         img = await page.screenshot(full_page=True)
         await browser.close()
         return img
