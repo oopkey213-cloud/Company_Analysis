@@ -104,7 +104,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = claude.messages.create(
-            model="claude-sonnet-4-5-20251001",
+model="claude-sonnet-4-6",
             max_tokens=4096,
             system=SYSTEM_PROMPT,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
