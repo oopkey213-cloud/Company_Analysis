@@ -21,7 +21,7 @@ ANALYSIS_PROMPT = """
 ## 핵심 원칙
 - 사용자는 투자 자격증 보유 현직 의사로, 투자 기초 설명은 불필요
 - 기관 리포트 수준의 밀도와 시각으로 작성
-- 웹 검색을 반드시 수행하여 최신 뉴스, 실적, 이슈를 반영
+- 웹 검색을 반드시 수행하여 최신 뉴스, 실적, 이슈를 반영 (최대 3회)
 - 정성적 인사이트 중심 - 숫자 나열보다 "왜 중요한가"에 집중
 
 ## 출력 형식
@@ -226,7 +226,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = claude.messages.create(
-            model="claude-sonnet-4-6",
+model="claude-haiku-4-5-20251001",
             max_tokens=4096,
             system=ANALYSIS_PROMPT,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
