@@ -7,18 +7,20 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 def find_font():
-    candidates = [
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            logging.info(f"Using font: {p}")
-            return p
-    logging.warning("No font found, will use default")
-    return None
+    font_path = "/tmp/NanumGothic.ttf"
+    if not os.path.exists(font_path):
+        try:
+            import urllib.request
+            url = "https://github.com/naver/nanumfont/raw/master/fonts/NanumFontSetup_TTF_GOTHIC/NanumGothic.ttf"
+            urllib.request.urlretrieve(url, font_path)
+            logging.info(f"Font downloaded: {font_path}")
+        except Exception as e:
+            logging.error(f"Font download failed: {e}")
+            for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
+                if os.path.exists(p):
+                    return p
+            return None
+    return font_path
 
 FONT_PATH = find_font()
 
