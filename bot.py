@@ -170,10 +170,13 @@ def build_html(data: dict) -> str:
 <html>
 <head>
 <meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  @font-face {
+    font-family: 'NotoSansKR';
+    src: url('https://cdn.jsdelivr.net/gh/google/fonts/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf');
+  }
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+body {{ font-family: 'NotoSansKR', sans-serif;
   .wrap {{ display: flex; flex-direction: column; gap: 12px; }}
   .header {{ background: #fff; border: 0.5px solid #e0ddd4; border-radius: 12px; padding: 20px 24px; }}
   .ticker {{ font-size: 12px; color: #888; letter-spacing: 0.05em; margin-bottom: 4px; }}
