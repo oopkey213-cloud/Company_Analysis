@@ -442,7 +442,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = claude.messages.create(
-            model="claude-haiku-4-5-20251001",
+model="claude-sonnet-4-6",
             max_tokens=4096,
             system=ANALYSIS_PROMPT,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
@@ -467,7 +467,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
         img_bytes = Card().render(data)
-        await update.message.reply_photo(photo=img_bytes)
+await update.message.reply_photo(photo=io.BytesIO(img_bytes))
 
     except Exception as e:
         logging.error(f"Error: {e}", exc_info=True)
