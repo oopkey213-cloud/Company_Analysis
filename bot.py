@@ -24,7 +24,7 @@ ANALYSIS_PROMPT = """
 - BM 내 점유율/순위/추세 명시.
 
 ## 웹 검색
-최대 3회. 최신 가격, 실적, 증권사 코멘트, 업황 변화 중심.
+최대 2회. 최신 가격, 실적, 증권사 코멘트, 업황 변화 중심.
 
 ## 출력 형식
 JSON만 출력. 앞뒤 텍스트 금지. cite 태그·HTML 절대 금지.
@@ -249,7 +249,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = claude.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+max_tokens=2048,
             system=ANALYSIS_PROMPT,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": user_message}]
